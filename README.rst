@@ -18,6 +18,10 @@ IB Wrapper
 
 Dynamic runtime TWS IB API for python
 
+Inspired in https://github.com/erdewit/ib_insync but much simplier.
+
+As the TWS-API wrapping is made dynamically, is always up-to-date with the underlying API installed version.
+Is not necessary to make code maintenance tasks every time IB release a new version.
 
 * Free software: MIT license
 * Documentation: https://ib-wrapper.readthedocs.io.
@@ -27,6 +31,8 @@ Features
 --------
 
 * TODO
+- make a command line version to testing basic usages.
+- make test that check a trading session using a demo account.
 
 Credits
 -------
