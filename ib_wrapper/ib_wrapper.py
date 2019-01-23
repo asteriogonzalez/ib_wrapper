@@ -4,6 +4,7 @@
 avoid user to deal with asyncrhonous world.
 """
 import re
+import time
 import inspect
 from threading import Thread, Lock
 
@@ -101,8 +102,9 @@ class IBWrapper():
         'SUBMULTIPLE': dict(timeout=-1, one_shot=False, multiple_callbacks=True),
     }
 
-    def __init__(self, excluded=('error', )):
+    def __init__(self, app, excluded=('error', )):
         super(IBWrapper, self).__init__()
+        self.app = app
         self._req2data = dict()
         self._excluded_methods = excluded
         self.timeout = 60
@@ -303,8 +305,21 @@ class IBWrapper():
         answer = container[reqid] = Answer()
         answer._call_args = (f, args, kw)
         answer._reqid = reqid
-        f(reqid, *args, **kw)
-        return container, answer
+        tries = 10
+        for tries in range(10):
+            try:
+                f(reqid, *args, **kw)
+                return container, answer
+            except OSError as why:
+                if why.errno in (9, ):  # socket has been externally disconnected
+                    self.app.stop()
+                    time.sleep(1)  #  avoid too fast reconnecting dead lock
+                    self.app.start()
+                    foo = 1
+                else:
+                    raise why
+        raise TimeoutError("Unable to reconnect to TWS")
+
 
     def wrap_call(self, f, **context):
         """Get a new request Id, prepare an answer to hold all partial data
@@ -405,25 +420,48 @@ class IBApp(EWrapper, EClient):
         EWrapper.__init__(self)
         EClient.__init__(self, wrapper=self)
 
-        self.dwrapper = IBWrapper()
-        self._thread = Thread(target=self.run)
-        self.host, self.port, self.clientId = host, port, clientId
+        self.dwrapper = IBWrapper(app=self)
+        self._thread = None
+        self._connection_specs = (host, port, clientId)
 
     def start(self):
         "Connect and make the wrap, and start network main loop."
         self.reconnect()
         # need to be done after connection
         self.dwrapper.dinamic_wrapping(self)
+        # TODO: it is safe to try to wrap multiples times?
+        # self.dwrapper.dinamic_wrapping(self)
+        self._thread = Thread(target=self.run)
         self._thread.start()
+        time.sleep(1)  #  let the main loop to run, avoiding dead lock on fast reconnections
 
     def stop(self):
         "Stop the network client"
         self.done = True
+        if self.isConnected():
+            self.disconnect()
+        self._thread.join(timeout=10)
+        self._thread = None
+        foo = 1
 
     def reconnect(self):
         "Try to reconnect if is disconnected."
-        if not self.isConnected():
-            self.connect(self.host, self.port, self.clientId)
+        while self._thread:
+            print("waiting old thread to die")
+            time.sleep(1)
+
+        for tries in range(120):
+            print("connecting to: {}".format(self._connection_specs))
+            self.connect(*self._connection_specs)
+            if self.isConnected():
+                print("connected  to: {}".format(self._connection_specs))
+                break
+            print("Trying to connect to TWS ...[{}]".format(tries))
+            time.sleep(1)
+        else:
+            raise RuntimeError("Unable to connect to TWS at {}".format(request.param))
+
+
 
 
 def test_contract_details(app):
