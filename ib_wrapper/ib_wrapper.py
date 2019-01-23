@@ -83,6 +83,14 @@ class IBWrapper():
 
     The rules to wrapping and grouping are based on function name and
     signature.
+
+    Notes:
+    - BLOCKING requests are ended by TWS.
+    - SUBSCRIPTION requests are ended by user, so the returned answer must be provided.
+
+        >>> answer = app.reqRealTimeBars(instrument.contract, 5, 'TRADES', 0, [])
+        >>> app.cancelRealTimeBars(answer)
+
     """
     reqid = 0
 
@@ -170,7 +178,7 @@ class IBWrapper():
             ('SUBSCRIPTION', [
                 (r'req(?P<key>.*?)\((reqId|requestId),.*', self.wrap_call),
                 (r'{fname}\((reqId|requestId),.*', self.wrap_receive),
-                (r'cancel{fname}\((reqId|requestId)[,\)]', self.wrap_ends),
+                (r'cancel{fname}\((reqId|requestId)[,\)]', self.wrap_end_subscription),
                 ]
             ),
             # # subcription with multiples callbacks for receiving data
@@ -192,70 +200,6 @@ class IBWrapper():
         ]
 
         # TODO: retire matched signatures and not matched signatures as well
-
-
-
-        # available = dict([(sig, value) for (sig, value) in available.items() if 'MktDepth'.lower() in sig.lower()])
-
-        # TODO: remove this debugging code
-        foo = dict()
-        knowns = [
-            '__init__',
-            # 'accountSummary',
-            # 'historicalNews',
-            # 'reqAccountUpdatesMulti', 'accountUpdateMulti', 'accountUpdateMultiEnd',
-            # 'contractDetails',
-            # 'reqFundamentalData', 'fundamentalData', 'cancelFundamentalData',
-            # 'reqHeadTimeStamp', 'headTimestamp', 'cancelHeadTimeStamp',
-            # 'reqHistoricalData', 'historicalData', 'historicalDataEnd',
-            # 'reqHistoricalTicks', 'xxx', 'xxxx',
-            # 'reqMktDepth', 'updateMktDepth', 'updateMktDepthL2', 'cancelMktDepth',
-            # 'reqPnL', 'pnl', 'cancelPnL',
-            # 'reqPositionsMulti', 'positionsMulti', 'positionMultiEnd',
-            # 'reqRealTimeBars', 'realtimeBar', 'cancelRealTimeBars',
-            # 'xxx', 'xxx', 'xxxx',
-            # 'xxx', 'xxx', 'xxxx',
-            # 'xxx', 'xxx', 'xxxx',
-        ]
-        todo = [
-            #  anoying
-            'reqExecutions', 'execDetails', 'execDetailsEnd',
-            'historicalTicks', 'historicalTicksBidAsk', 'historicalTicksLast',
-            'reqMatchingSymbols', 'symbolSamples',
-            'reqMktData', 'cancelMktData',
-            'reqNewsArticle', 'newsArticle',
-            'reqScannerSubscription',
-            'reqSecDefOptParams',
-            'reqSmartComponents', 'smartComponents'
-            'xxxx',
-            'xxxx',
-            'xxxx',
-            'xxxx',
-            'xxxx',
-            'xxxx',
-            'xxxx',
-        ]
-
-        todo.extend(knowns)
-
-        valid = ['reqRealTimeBars', 'realtimeBar', 'cancelRealTimeBars',
-                  'reqcontractDetails', 'contractDetails', 'contractDetailsEnd']
-
-        # for sig, method in available.items():
-            # for k in todo:
-                # if k.lower() in sig.lower():
-                    # break
-            # else:
-                # foo[sig] = method
-        # available = foo
-
-        for sig, method in available.items():
-            for k in valid:
-                if k.lower() in sig.lower():
-                    foo[sig] = method
-                    break
-
-        available = foo
 
         for sig in available:
             if 'reqMktData'.lower() in sig.lower():
@@ -358,8 +302,9 @@ class IBWrapper():
         # key = self.gen_key(f, args, **kw)
         answer = container[reqid] = Answer()
         answer._call_args = (f, args, kw)
+        answer._reqid = reqid
         f(reqid, *args, **kw)
-        return container, reqid, answer
+        return container, answer
 
     def wrap_call(self, f, **context):
         """Get a new request Id, prepare an answer to hold all partial data
@@ -368,14 +313,14 @@ class IBWrapper():
         def wrap(*args, **kw):
             # lapse = kw.pop('polling', -1)  # -1 will stop future calls
             # self.reschedule(f, -1, lapse, args, kw)
-            container, reqid, answer = self.make_call(f, args, kw)
+            container, answer = self.make_call(f, args, kw)
             # handle blocking response until timeout
             context = self._wrapper_context[f]
             timeout = context['timeout']
             if timeout > 0:
                 if not answer.acquire(timeout):
                     raise TimeoutError("waiting finishing {}".format(f))
-                container.pop(reqid)
+                container.pop(answer._reqid)
             return answer
         self._wrapper_context[f] = context
         return wrap
@@ -409,6 +354,14 @@ class IBWrapper():
         self._wrapper_context[f] = context
         return wrap
 
+    def wrap_end_subscription(self, f, **context):
+        def wrap(answer):
+            reqid = answer._reqid
+            self._cancel_request(f, reqid)
+            return f(reqid)
+        self._wrapper_context[f] = context
+        return wrap
+
     def _cancel_request(self, f, reqid):
         container = self.get_container(f)
         answer = container[reqid]
@@ -416,10 +369,6 @@ class IBWrapper():
         # key = answer.key
         # compute and process differences
         # self._diff_state.update(answer.values, key)
-
-
-
-
 
 
         # for fname, method in inspect.getmembers(instance, inspect.ismethod):
