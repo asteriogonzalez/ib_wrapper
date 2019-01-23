@@ -5,6 +5,9 @@ avoid user to deal with asyncrhonous world.
 """
 import re
 import time
+import collections
+from functools import reduce
+from operator import and_
 import inspect
 from threading import Thread, Lock
 
@@ -13,6 +16,14 @@ import ibapi.client
 from ibapi.wrapper import EWrapper
 from ibapi.client import EClient, decoder
 from ibapi.contract import *
+
+def flatten(l):
+    #  from https://stackoverflow.com/questions/2158395/flatten-an-irregular-list-of-lists
+    for el in l:
+        if isinstance(el, collections.Iterable) and not isinstance(el, (str, bytes)):
+            yield from flatten(el)
+        else:
+            yield el
 
 # def getfunc():
     # from inspect import currentframe, getframeinfo
@@ -85,12 +96,35 @@ class IBWrapper():
     The rules to wrapping and grouping are based on function name and
     signature.
 
+    Wrapper preserve as much as posible the original TWS API, calls arguments,etc.
+
+    - When receiving data, we can postprocess data in wrapper internal structure,
+      but the underlaying methods are called with unmodified values from network.
+
+      >>> answer = app.reqManagedAccts()
+      >>> answer
+      ['DF1234567', 'DU1000000', 'DU1000001', 'DU1000002', 'DU1000003', 'DU1000003']
+
+      despite original wrapper EWrapper.managerAccounts() if called with the string
+      'DF1234567,DU1000000,DU1000001,DU1000002,DU1000003,DU1000003,'
+
+
     Notes:
     - BLOCKING requests are ended by TWS.
     - SUBSCRIPTION requests are ended by user, so the returned answer must be provided.
 
         >>> answer = app.reqRealTimeBars(instrument.contract, 5, 'TRADES', 0, [])
         >>> app.cancelRealTimeBars(answer)
+
+    - ONESHOT request use a key group as internal identifier, as TWS will not require it.
+       The key will remain in dwrapper as cache:
+
+        >>> answer = app.reqManagedAccts()
+        >>> answer._reqid
+        'ManagedAccts'
+        >>> app.dwrapper._req2data
+        {'ManagedAccts': ['DF1234567', 'DU1000000', 'DU1000001', 'DU1000002', 'DU1000003', 'DU1000003']}
+
 
     """
     reqid = 0
@@ -144,13 +178,30 @@ class IBWrapper():
 
         It is safe to call more than once to this method.
         """
-        def split_plurals(name):
-            splitted = re.sub('(?!^)([A-Z][a-z]+)', r' \1', name).split()
-            for i, key in enumerate(splitted):
-                if key.endswith('s'):
-                    key = '({}|{})'.format(key, key[:-1])
-                    splitted[i] = key
-            return ''.join(splitted)
+        def split_names(name):
+            aliases = {
+                'Accts':  'Accounts',
+            }
+            aux = re.sub('(?!^)([A-Z][a-z]+)', r' \1', name).split()
+            aux = [list((k, )) for k in aux]
+
+            for i, keys in enumerate(aux):
+                # add aliases
+                for j, key in enumerate(keys):
+                    alias = aliases.get(key, None)
+                    if alias:
+                        keys.append(alias)
+
+                # add plurals/singulars
+                for j, key in enumerate(keys):
+                    if key.endswith('s'):
+                        keys.append(key[:-1])
+
+                aux[i] = '|'.join(keys)
+
+
+            return ''.join(['({})'.format(k) for k in aux])
+
 
         def get_signature(method):
             sig = inspect.signature(method)
@@ -164,23 +215,229 @@ class IBWrapper():
         available = dict([(get_signature(method), method) for (_, method) in \
                           inspect.getmembers(instance, inspect.ismethod)])
 
+        # debug = [k for k in available.keys()]
+        foo = 1
+
+        debug = [
+
+            # blocking
+            'reqContractDetails(reqId,contract)',
+            'contractDetails(reqId,contractDetails)',
+            'contractDetailsEnd(reqId)',
+
+            # one shot call
+            'reqManagedAccts()',
+            'managedAccounts(accountsList)',
+
+            # subcription
+            'reqRealTimeBars(reqId,contract,barSize,whatToShow,useRTH,realTimeBarsOptions)',
+            'cancelRealTimeBars(reqId)',
+            'realtimeBar(reqId,time,open_,high,low,close,volume,wap,count)',
+
+
+
+        # '__init__(host,port,clientId)',
+        # 'accountDownloadEnd(accountName)',
+        # 'accountSummary(reqId,account,tag,value,currency)',
+        # 'accountSummaryEnd(reqId)',
+        # 'accountUpdateMulti(reqId,account,modelCode,key,value,currency)',
+        # 'accountUpdateMultiEnd(reqId)',
+        # 'bondContractDetails(reqId,contractDetails)',
+        # 'calculateImpliedVolatility(reqId,contract,optionPrice,underPrice,implVolOptions)',
+        # 'calculateOptionPrice(reqId,contract,volatility,underPrice,optPrcOptions)',
+        # 'cancelAccountSummary(reqId)',
+        # 'cancelAccountUpdatesMulti(reqId)',
+        # 'cancelCalculateImpliedVolatility(reqId)',
+        # 'cancelCalculateOptionPrice(reqId)',
+        # 'cancelFundamentalData(reqId)',
+        # 'cancelHeadTimeStamp(reqId)',
+        # 'cancelHistogramData(tickerId)',
+        # 'cancelHistoricalData(reqId)',
+        # 'cancelMktData(reqId)',
+        # 'cancelMktDepth(reqId,isSmartDepth)',
+        # 'cancelNewsBulletins()',
+        # 'cancelOrder(orderId)',
+        # 'cancelPnL(reqId)',
+        # 'cancelPnLSingle(reqId)',
+        # 'cancelPositions()',
+        # 'cancelPositionsMulti(reqId)',
+        # 'cancelScannerSubscription(reqId)',
+        # 'cancelTickByTickData(reqId)',
+        # 'commissionReport(commissionReport)',
+        # 'connect(host,port,clientId)',
+        # 'connectAck()',
+        # 'connectionClosed()',
+
+        # 'currentTime(time)',
+        # 'deltaNeutralValidation(reqId,deltaNeutralContract)',
+        # 'disconnect()',
+        # 'displayGroupList(reqId,groups)',
+        # 'displayGroupUpdated(reqId,contractInfo)',
+        # 'error(reqId,errorCode,errorString)',
+        # 'execDetails(reqId,contract,execution)',
+        # 'execDetailsEnd(reqId)',
+        # 'exerciseOptions(reqId,contract,exerciseAction,exerciseQuantity,account,override)',
+        # 'familyCodes(familyCodes)',
+        # 'fundamentalData(reqId,data)',
+        # 'headTimestamp(reqId,headTimestamp)',
+        # 'histogramData(reqId,items)',
+        # 'historicalData(reqId,bar)',
+        # 'historicalDataEnd(reqId,start,end)',
+        # 'historicalDataUpdate(reqId,bar)',
+        # 'historicalNews(requestId,time,providerCode,articleId,headline)',
+        # 'historicalNewsEnd(requestId,hasMore)',
+        # 'historicalTicks(reqId,ticks,done)',
+        # 'historicalTicksBidAsk(reqId,ticks,done)',
+        # 'historicalTicksLast(reqId,ticks,done)',
+        # 'isConnected()',
+        # 'keyboardInterrupt()',
+        # 'keyboardInterruptHard()',
+        # 'logAnswer(fnName,fnParams)',
+        # 'logRequest(fnName,fnParams)',
+        # 'marketDataType(reqId,marketDataType)',
+        # 'marketRule(marketRuleId,priceIncrements)',
+        # 'mktDepthExchanges(depthMktDataDescriptions)',
+        # 'newsArticle(requestId,articleType,articleText)',
+        # 'newsProviders(newsProviders)',
+        # 'nextValidId(orderId)',
+        # 'openOrder(orderId,contract,order,orderState)',
+        # 'openOrderEnd()',
+        # 'orderBound(reqId,apiClientId,apiOrderId)',
+        # 'orderStatus(orderId,status,filled,remaining,avgFillPrice,permId,parentId,lastFillPrice,clientId,whyHeld,mktCapPrice)',
+        # 'placeOrder(orderId,contract,order)',
+        # 'pnl(reqId,dailyPnL,unrealizedPnL,realizedPnL)',
+        # 'pnlSingle(reqId,pos,dailyPnL,unrealizedPnL,realizedPnL,value)',
+        # 'position(account,contract,position,avgCost)',
+        # 'positionEnd()',
+        # 'positionMulti(reqId,account,modelCode,contract,pos,avgCost)',
+        # 'positionMultiEnd(reqId)',
+        # 'queryDisplayGroups(reqId)',
+        # 'receiveFA(faData,cxml)',
+        # 'reconnect()',
+        # 'replaceFA(faData,cxml)',
+        # 'reqAccountSummary(reqId,groupName,tags)',
+        # 'reqAccountUpdates(subscribe,acctCode)',
+        # 'reqAccountUpdatesMulti(reqId,account,modelCode,ledgerAndNLV)',
+        # 'reqAllOpenOrders()',
+        # 'reqAutoOpenOrders(bAutoBind)',
+        # 'reqCurrentTime()',
+        # 'reqExecutions(reqId,execFilter)',
+        # 'reqFamilyCodes()',
+        # 'reqFundamentalData(reqId,contract,reportType,fundamentalDataOptions)',
+        # 'reqGlobalCancel()',
+        # 'reqHeadTimeStamp(reqId,contract,whatToShow,useRTH,formatDate)',
+        # 'reqHistogramData(tickerId,contract,useRTH,timePeriod)',
+        # 'reqHistoricalData(reqId,contract,endDateTime,durationStr,barSizeSetting,whatToShow,useRTH,formatDate,keepUpToDate,chartOptions)',
+        # 'reqHistoricalNews(reqId,conId,providerCodes,startDateTime,endDateTime,totalResults,historicalNewsOptions)',
+        # 'reqHistoricalTicks(reqId,contract,startDateTime,endDateTime,numberOfTicks,whatToShow,useRth,ignoreSize,miscOptions)',
+        # 'reqIds(numIds)',
+        # 'reqMarketDataType(marketDataType)',
+        # 'reqMarketRule(marketRuleId)',
+        # 'reqMatchingSymbols(reqId,pattern)',
+        # 'reqMktData(reqId,contract,genericTickList,snapshot,regulatorySnapshot,mktDataOptions)',
+        # 'reqMktDepth(reqId,contract,numRows,isSmartDepth,mktDepthOptions)',
+        # 'reqMktDepthExchanges()',
+        # 'reqNewsArticle(reqId,providerCode,articleId,newsArticleOptions)',
+        # 'reqNewsBulletins(allMsgs)',
+        # 'reqNewsProviders()',
+        # 'reqOpenOrders()',
+        # 'reqPnL(reqId,account,modelCode)',
+        # 'reqPnLSingle(reqId,account,modelCode,conid)',
+        # 'reqPositions()',
+        # 'reqPositionsMulti(reqId,account,modelCode)',
+        # 'reqScannerParameters()',
+        # 'reqScannerSubscription(reqId,subscription,scannerSubscriptionOptions,scannerSubscriptionFilterOptions)',
+        # 'reqSecDefOptParams(reqId,underlyingSymbol,futFopExchange,underlyingSecType,underlyingConId)',
+        # 'reqSmartComponents(reqId,bboExchange)',
+        # 'reqSoftDollarTiers(reqId)',
+        # 'reqTickByTickData(reqId,contract,tickType,numberOfTicks,ignoreSize)',
+        # 'requestFA(faData)',
+        # 'rerouteMktDataReq(reqId,conId,exchange)',
+        # 'rerouteMktDepthReq(reqId,conId,exchange)',
+        # 'reset()',
+        # 'run()',
+        # 'scannerData(reqId,rank,contractDetails,distance,benchmark,projection,legsStr)',
+        # 'scannerDataEnd(reqId)',
+        # 'scannerParameters(xml)',
+        # 'securityDefinitionOptionParameter(reqId,exchange,underlyingConId,tradingClass,multiplier,expirations,strikes)',
+        # 'securityDefinitionOptionParameterEnd(reqId)',
+        # 'sendMsg(msg)',
+        # 'serverVersion()',
+        # 'setConnState(connState)',
+        # 'setServerLogLevel(logLevel)',
+        # 'smartComponents(reqId,smartComponentMap)',
+        # 'softDollarTiers(reqId,tiers)',
+        # 'start()',
+        # 'startApi()',
+        # 'stop()',
+        # 'subscribeToGroupEvents(reqId,groupId)',
+        # 'symbolSamples(reqId,contractDescriptions)',
+        # 'tickByTickAllLast(reqId,tickType,time,price,size,tickAttribLast,exchange,specialConditions)',
+        # 'tickByTickBidAsk(reqId,time,bidPrice,askPrice,bidSize,askSize,tickAttribBidAsk)',
+        # 'tickByTickMidPoint(reqId,time,midPoint)',
+        # 'tickEFP(reqId,tickType,basisPoints,formattedBasisPoints,totalDividends,holdDays,futureLastTradeDate,dividendImpact,dividendsToLastTradeDate)',
+        # 'tickGeneric(reqId,tickType,value)',
+        # 'tickNews(tickerId,timeStamp,providerCode,articleId,headline,extraData)',
+        # 'tickOptionComputation(reqId,tickType,impliedVol,delta,optPrice,pvDividend,gamma,vega,theta,undPrice)',
+        # 'tickPrice(reqId,tickType,price,attrib)',
+        # 'tickReqParams(tickerId,minTick,bboExchange,snapshotPermissions)',
+        # 'tickSize(reqId,tickType,size)',
+        # 'tickSnapshotEnd(reqId)',
+        # 'tickString(reqId,tickType,value)',
+        # 'twsConnectionTime()',
+        # 'unsubscribeFromGroupEvents(reqId)',
+        # 'updateAccountTime(timeStamp)',
+        # 'updateAccountValue(key,val,currency,accountName)',
+        # 'updateDisplayGroup(reqId,contractInfo)',
+        # 'updateMktDepth(reqId,position,operation,side,price,size)',
+        # 'updateMktDepthL2(reqId,position,marketMaker,operation,side,price,size,isSmartDepth)',
+        # 'updateNewsBulletin(msgId,msgType,newsMessage,originExch)',
+        # 'updatePortfolio(contract,position,marketPrice,marketValue,averageCost,unrealizedPNL,realizedPNL,accountName)',
+        # 'verifyAndAuthCompleted(isSuccessful,errorText)',
+        # 'verifyAndAuthMessage(apiData,xyzResponse)',
+        # 'verifyAndAuthMessageAPI(apiData,xyzChallange)',
+        # 'verifyAndAuthRequest(apiName,apiVersion,opaqueIsvKey)',
+        # 'verifyCompleted(isSuccessful,errorText)',
+        # 'verifyMessage(apiData)',
+        # 'verifyMessageAPI(apiData)',
+        # 'verifyRequest(apiName,apiVersion)',
+        # 'winError(text,lastError)'
+        ]
+
+        foo = dict()
+        for k in debug:
+            if k in available:
+                foo[k] = available[k]
+
+        available = foo
+
         patterns = [
 
             # blocking req X, answer X, req X Ends
             # e.g. reqAccountSummary, accountSummary, accountSummaryEnd
             ('BLOCKING', [
-                (r'req(?P<key>.*?)\((reqId|requestId),.*', self.wrap_call),
-                (r'{fname}\((reqId|requestId),.*', self.wrap_receive),
-                (r'{fname}End\((reqId|requestId)[,\)]', self.wrap_ends),
+                (r'req(?P<key>.*?)\((reqId|requestId),.*', self.wrap_call, []),
+                (r'{fname}\((reqId|requestId),.*', self.wrap_receive, [self._filter_string2list]),
+                (r'{fname}End\((reqId|requestId)[,\)]', self.wrap_ends, []),
                 ]
              ),
+
+            # blocking req X, answer X, req X Ends
+            # e.g. reqAccountSummary, accountSummary, accountSummaryEnd
+            ('ONESHOT', [
+                (r'req(?P<key>.*?)\(\)', self.wrap_call, []),
+                (r'{fname}\(.*', self.wrap_receive, [self._filter_string2list]),
+                ]
+             ),
+
+
 
             # subcription req X, answer X, cancel X
             # e.g. reqAccountSummary, accountSummary, accountSummaryEnd
             ('SUBSCRIPTION', [
-                (r'req(?P<key>.*?)\((reqId|requestId),.*', self.wrap_call),
-                (r'{fname}\((reqId|requestId),.*', self.wrap_receive),
-                (r'cancel{fname}\((reqId|requestId)[,\)]', self.wrap_end_subscription),
+                (r'req(?P<key>.*?)\((reqId|requestId),.*', self.wrap_call, []),
+                (r'{fname}\((reqId|requestId),.*', self.wrap_receive, []),
+                (r'cancel{fname}\((reqId|requestId)[,\)]', self.wrap_end_subscription, []),
                 ]
             ),
             # # subcription with multiples callbacks for receiving data
@@ -219,7 +476,7 @@ class IBWrapper():
                 context = dict(self.BEHAVIOR[group])
                 matches = dict()
                 print("........... candidates: {}".format(len(candidates)))
-                for pat, wrap in patgroup:
+                for pat, wrap, filters in patgroup:
                     exp = pat.format(**context)  # expand pattern
                     # seach for next desired method in group
                     for sig, method in candidates.items():
@@ -230,8 +487,9 @@ class IBWrapper():
                         if m:
                             d = m.groupdict()
                             context.update(d)
+                            context['filters'] = filters
                             if 'key' in d:
-                                context['fname'] = split_plurals(d['key'])
+                                context['fname'] = split_names(d['key'])
                             matches[sig] = (pat, method, wrap, context)
                             print('+ match {} with {}'.format(exp, sig))
                             any_matched += 1
@@ -299,16 +557,23 @@ class IBWrapper():
 
     def make_call(self, f, args, kw):
         "Prepare Answer placeholder and the key to analyze response history."
-        reqid = self.next_rid()
+
+        context = self._wrapper_context[f]
         container = self.get_container(f)
-        # key = self.gen_key(f, args, **kw)
+
+        if context['one_shot'] == False:
+            reqid = self.next_rid()
+            args = tuple([reqid, *args])
+        else:
+            reqid = context['key']
+
         answer = container[reqid] = Answer()
         answer._call_args = (f, args, kw)
         answer._reqid = reqid
         tries = 10
         for tries in range(10):
             try:
-                f(reqid, *args, **kw)
+                f(*args, **kw)
                 return container, answer
             except OSError as why:
                 if why.errno in (9, ):  # socket has been externally disconnected
@@ -335,7 +600,10 @@ class IBWrapper():
             if timeout > 0:
                 if not answer.acquire(timeout):
                     raise TimeoutError("waiting finishing {}".format(f))
-                container.pop(answer._reqid)
+
+                if context['one_shot'] == False:
+                    # one shot calls will remain as cache
+                    container.pop(answer._reqid)
             return answer
         self._wrapper_context[f] = context
         return wrap
@@ -343,18 +611,31 @@ class IBWrapper():
     def wrap_receive(self, f, **context):
         """Collect all the responses until request is completely finished."""
         def wrap(*args, **kw):
-            container = self.get_container(f)
-            reqid, args = args[0], args[1:]
-            if len(args) == 1:
-                container[reqid].append(*args)
-            else:
-                container[reqid].append(args)
-
             context = self._wrapper_context[f]
-            if context['one_shot']:
-                self._cancel_request(f, reqid)
+            container = self.get_container(f)
 
-            return f(reqid, *args, **kw)
+            if context['one_shot'] == False:
+                reqid, _args = args[0], args[1:]
+            else:
+                reqid, _args = context['key'], args
+                if reqid not in container:
+                    answer = container[reqid] = Answer()
+                    answer._call_args = (f, tuple('?', ), dict())
+                    answer._reqid = reqid
+
+            answer = container[reqid]
+            for func in context['filters']:
+                _args = func(_args)
+
+            if len(_args) == 1:
+                answer.append(*_args)
+            else:
+                answer.append(_args)
+
+            if context['one_shot'] == True:
+                answer.release()
+
+            return f(*args, **kw)
         self._wrapper_context[f] = context
         return wrap
 
@@ -381,34 +662,14 @@ class IBWrapper():
         container = self.get_container(f)
         answer = container[reqid]
         answer.release()
-        # key = answer.key
-        # compute and process differences
-        # self._diff_state.update(answer.values, key)
 
-
-        # for fname, method in inspect.getmembers(instance, inspect.ismethod):
-            # sig = get_signature(method)
-            # print(sig)
-            # foo = 1
-
-        # for (fname, meth) in methods:
-            # if fname in self._excluded_methods:
-                # continue
-            # sig = inspect.signature(meth)
-            # if fname.endswith('End'):
-                # print("- wrap end: {}".format(fname))
-                # setattr(instance, fname, self.wrap_ends(meth))
-                # continue
-            # # print('{}: {}'.format(fname, sig.parameters))
-            # for p in sig.parameters.keys():
-                # if p == 'reqId':
-                    # if fname.startswith('req'):
-                        # print("> wrap request: {}".format(fname))
-                        # setattr(instance, fname, self.wrap_call(meth, key=fname))
-                    # else:
-                        # print("< wrap response: {}".format(fname))
-                        # setattr(instance, fname, self.wrap_receive(meth))
-                # break  # only 1st parameter
+    def _filter_string2list(self, args):
+        result = list()
+        for value in args:
+            if isinstance(value, str):
+                value = [v for v in value.strip().split(',') if v]
+            result.append(value)
+        return tuple(result)
 
 
 class IBApp(EWrapper, EClient):
@@ -416,10 +677,11 @@ class IBApp(EWrapper, EClient):
     It combines a running network client and a wrapper for receiving callbacks.
     """
 
-    def __init__(self, host='tws', port=7496, clientId=0):
+    def __init__(self, host='tws', port=7496, clientId=0, demo=True):
         EWrapper.__init__(self)
         EClient.__init__(self, wrapper=self)
 
+        self.demo = demo
         self.dwrapper = IBWrapper(app=self)
         self._thread = None
         self._connection_specs = (host, port, clientId)
@@ -433,7 +695,18 @@ class IBApp(EWrapper, EClient):
         # self.dwrapper.dinamic_wrapping(self)
         self._thread = Thread(target=self.run)
         self._thread.start()
+
         time.sleep(1)  #  let the main loop to run, avoiding dead lock on fast reconnections
+
+        answer = self.reqManagedAccts()
+        if self.demo:
+            condition = [account.startswith('D') for account in flatten(answer)]
+            if not reduce(and_, condition):
+                raise RuntimeError(
+                    'You can not operate with any demo account {}.\
+                    Pass demo=False in constructor'.format(answer))
+
+        foo = 1
 
     def stop(self):
         "Stop the network client"
