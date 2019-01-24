@@ -162,8 +162,12 @@ def test_historical_data(app, ES):
 def test_place_orders(app):
     """
     - Get current position status
+
     - Place orders not to be filled
+
     - Move order until are filled
+    https://interactivebrokers.github.io/tws-api/modifying_orders.html
+
     - Check position
 
 

@@ -186,6 +186,7 @@ class IBWrapper():
         def split_names(name):
             aliases = {
                 'Accts':  'Accounts',
+                # 'All': '(All)?',
             }
             aux = re.sub('(?!^)([A-Z][a-z]+)', r' \1', name).split()
             aux = [list((k, )) for k in aux]
@@ -203,7 +204,6 @@ class IBWrapper():
                         keys.append(key[:-1])
 
                 aux[i] = '|'.join(keys)
-
 
             return ''.join(['({})'.format(k) for k in aux])
 
@@ -225,28 +225,35 @@ class IBWrapper():
 
         debug = [
 
-            # direct
-            'error(reqId,errorCode,errorString)',
+            # # direct
+            # 'error(reqId,errorCode,errorString)',
 
-            # blocking
-            'reqContractDetails(reqId,contract)',
-            'contractDetails(reqId,contractDetails)',
-            'contractDetailsEnd(reqId)',
+            # # blocking
+            # 'reqContractDetails(reqId,contract)',
+            # 'contractDetails(reqId,contractDetails)',
+            # 'contractDetailsEnd(reqId)',
 
-            # subscription
-            'reqRealTimeBars(reqId,contract,barSize,whatToShow,useRTH,realTimeBarsOptions)',
-            'realtimeBar(reqId,time,open_,high,low,close,volume,wap,count)',
-            'cancelRealTimeBars(reqId)',
+            # # subscription
+            # 'reqRealTimeBars(reqId,contract,barSize,whatToShow,useRTH,realTimeBarsOptions)',
+            # 'realtimeBar(reqId,time,open_,high,low,close,volume,wap,count)',
+            # 'cancelRealTimeBars(reqId)',
 
-            # one shot call
-            'reqManagedAccts()',
-            'managedAccounts(accountsList)',
+            # # one shot call
+            # 'reqManagedAccts()',
+            # 'managedAccounts(accountsList)',
 
-            # subscription
-            'reqHistoricalData(reqId,contract,endDateTime,durationStr,barSizeSetting,whatToShow,useRTH,formatDate,keepUpToDate,chartOptions)',
-            'cancelHistoricalData(reqId)',
-            'historicalData(reqId,bar)',
-            'historicalDataEnd(reqId,start,end)',
+            # # subscription
+            # 'reqHistoricalData(reqId,contract,endDateTime,durationStr,barSizeSetting,whatToShow,useRTH,formatDate,keepUpToDate,chartOptions)',
+            # 'cancelHistoricalData(reqId)',
+            # 'historicalData(reqId,bar)',
+            # 'historicalDataEnd(reqId,start,end)',
+
+            # Async requests without reqId
+            'reqAllOpenOrders()',
+            'reqOpenOrders()',
+            'openOrder(orderId,contract,order,orderState)',
+            'orderStatus(orderId,status,filled,remaining,avgFillPrice,permId,parentId,lastFillPrice,clientId,whyHeld,mktCapPrice)',
+            'openOrderEnd()',
 
 
 
@@ -280,7 +287,6 @@ class IBWrapper():
         # 'connect(host,port,clientId)',
         # 'connectAck()',
         # 'connectionClosed()',
-
         # 'currentTime(time)',
         # 'deltaNeutralValidation(reqId,deltaNeutralContract)',
         # 'disconnect()',
@@ -310,10 +316,7 @@ class IBWrapper():
         # 'newsArticle(requestId,articleType,articleText)',
         # 'newsProviders(newsProviders)',
         # 'nextValidId(orderId)',
-        # 'openOrder(orderId,contract,order,orderState)',
-        # 'openOrderEnd()',
         # 'orderBound(reqId,apiClientId,apiOrderId)',
-        # 'orderStatus(orderId,status,filled,remaining,avgFillPrice,permId,parentId,lastFillPrice,clientId,whyHeld,mktCapPrice)',
         # 'placeOrder(orderId,contract,order)',
         # 'pnl(reqId,dailyPnL,unrealizedPnL,realizedPnL)',
         # 'pnlSingle(reqId,pos,dailyPnL,unrealizedPnL,realizedPnL,value)',
@@ -328,7 +331,6 @@ class IBWrapper():
         # 'reqAccountSummary(reqId,groupName,tags)',
         # 'reqAccountUpdates(subscribe,acctCode)',
         # 'reqAccountUpdatesMulti(reqId,account,modelCode,ledgerAndNLV)',
-        # 'reqAllOpenOrders()',
         # 'reqAutoOpenOrders(bAutoBind)',
         # 'reqCurrentTime()',
         # 'reqExecutions(reqId,execFilter)',
@@ -349,7 +351,6 @@ class IBWrapper():
         # 'reqNewsArticle(reqId,providerCode,articleId,newsArticleOptions)',
         # 'reqNewsBulletins(allMsgs)',
         # 'reqNewsProviders()',
-        # 'reqOpenOrders()',
         # 'reqPnL(reqId,account,modelCode)',
         # 'reqPnLSingle(reqId,account,modelCode,conid)',
         # 'reqPositions()',
@@ -421,48 +422,62 @@ class IBWrapper():
         available = foo
 
         patterns = [
-            # direct calls from API
-            # e.g. error
-            ('DIRECT', [
-                (r'error\((reqId|requestId),.*', self.wrap_error, []),
-                ]
-             ),
+            # # direct calls from API
+            # # e.g. error
+            # ('DIRECT', [
+                # (r'error\((reqId|requestId),.*', self.wrap_error, []),
+                # ]
+            # ),
+            # # ('DIRECT', [
+                # # (r'reqAllOpenOrders\(', self.wrap_call, []),
+                # # ]
+            # # ),
 
-            # blocking req X, answer X, req X Ends
-            # e.g. reqAccountSummary, accountSummary, accountSummaryEnd
-            ('BLOCKING', [
-                (r'req(?P<key>.*?)\((reqId|requestId),.*', self.wrap_call, []),
-                (r'{fname}\((reqId|requestId),.*', self.wrap_receive, [self._filter_string2list]),
-                (r'{fname}End\((reqId|requestId)[,\)]', self.wrap_ends, []),
-                ]
-             ),
+            # # blocking req X, answer X, req X Ends
+            # # e.g. reqAccountSummary, accountSummary, accountSummaryEnd
+            # ('BLOCKING', [
+                # (r'req(?P<key>.*?)\((reqId|requestId),.*', self.wrap_call, []),
+                # (r'{fname}\((reqId|requestId),.*', self.wrap_receive, [self._filter_string2list]),
+                # (r'{fname}End\((reqId|requestId)[,\)]', self.wrap_ends, []),
+                # ]
+            # ),
 
-            # blocking req X, answer X, req X Ends
-            # e.g. reqHistoricalData, historicalData, historicalDataEnd, cancelHistoricalData
-            ('BLOCKING', [
-                (r'req(?P<key>.*?)\((reqId|requestId),.*', self.wrap_call, []),
-                (r'{fname}\((reqId|requestId),.*', self.wrap_receive, [self._filter_string2list]),
-                (r'cancel{fname}\((reqId|requestId)[,\)]', self.wrap_end_subscription, []),
-                (r'{fname}End\((reqId|requestId)[,\)]', self.wrap_ends, []),
-                ]
-             ),
+            # # blocking req X, answer X, req X Ends
+            # # e.g. reqHistoricalData, historicalData, historicalDataEnd, cancelHistoricalData
+            # ('BLOCKING', [
+                # (r'req(?P<key>.*?)\((reqId|requestId),.*', self.wrap_call, []),
+                # (r'{fname}\((reqId|requestId),.*', self.wrap_receive, [self._filter_string2list]),
+                # (r'cancel{fname}\((reqId|requestId)[,\)]', self.wrap_end_subscription, []),
+                # (r'{fname}End\((reqId|requestId)[,\)]', self.wrap_ends, []),
+                # ]
+            # ),
 
-            # blocking req X, answer X, req X Ends
-            # e.g. reqAccountSummary, accountSummary, accountSummaryEnd
-            ('ONESHOT', [
-                (r'req(?P<key>.*?)\(\)', self.wrap_call, []),
-                (r'{fname}\(.*', self.wrap_receive, [self._filter_string2list]),
-                ]
-             ),
-
-            # subcription req X, answer X, cancel X
-            # e.g. reqAccountSummary, accountSummary, accountSummaryEnd
+            # Async requests without reqId
+            # e.g. reqAllOpenOrders, reqOpenOrders, openOrder, orderStatus, openOrderEnd
             ('SUBSCRIPTION', [
-                (r'req(?P<key>.*?)\((reqId|requestId),.*', self.wrap_call, []),
-                (r'{fname}\((reqId|requestId),.*', self.wrap_receive, []),
-                (r'cancel{fname}\((reqId|requestId)[,\)]', self.wrap_end_subscription, []),
+                (r'req(All)?(?P<key>.*?)\(\)', self.wrap_call, []),
+                (r'{fname}\(', self.wrap_receive, [self._filter_string2list]),
+                (r'{fname}End\(', self.wrap_ends, []),
                 ]
-            ),
+             ),
+
+
+            # # blocking req X, answer X, req X Ends
+            # # e.g. reqAccountSummary, accountSummary, accountSummaryEnd
+            # ('ONESHOT', [
+                # (r'req(?P<key>.*?)\(\)', self.wrap_call, []),
+                # (r'{fname}\(.*', self.wrap_receive, [self._filter_string2list]),
+                # ]
+            # ),
+
+            # # subcription req X, answer X, cancel X
+            # # e.g. reqAccountSummary, accountSummary, accountSummaryEnd
+            # ('SUBSCRIPTION', [
+                # (r'req(?P<key>.*?)\((reqId|requestId),.*', self.wrap_call, []),
+                # (r'{fname}\((reqId|requestId),.*', self.wrap_receive, []),
+                # (r'cancel{fname}\((reqId|requestId)[,\)]', self.wrap_end_subscription, []),
+                # ]
+            # ),
 
             # # subcription with multiples callbacks for receiving data
             # # req X, answer_i X, cancel X
@@ -488,47 +503,44 @@ class IBWrapper():
             if 'reqMktData'.lower() in sig.lower():
                 print(' {}'.format(sig))
 
-        kk = 'reqRealTimeBars'
+        kk = 'openOrderEnd'
         while available:
             unique_matches = list()
             partial_failed_matched = list()
             # iterate all pattern groups, so only
             # 1 group must match at the same time
-            candidates = dict(available)
-            any_matched = 0
             for group, patgroup in patterns:
                 context = dict(self.BEHAVIOR[group])
                 matches = dict()
-                # print("........... candidates: {}".format(len(candidates)))
+                candidates = dict(available)
+                print("........... candidates: {}".format(len(candidates)))
                 for pat, wrap, filters in patgroup:
                     exp = pat.format(**context)  # expand pattern
                     # seach for next desired method in group
-                    for sig, method in candidates.items():
-                        if kk.lower() in method.__name__.lower():
-                            # print('{} with {}'.format(sig, exp))
-                            foo = 1
-                        m = re.match(exp, sig, re.IGNORECASE)
-                        if m:
-                            d = m.groupdict()
-                            context.update(d)
-                            context['filters'] = filters
-                            if 'key' in d:
-                                context['fname'] = split_names(d['key'])
-                            matches[sig] = (pat, method, wrap, context)
-                            # print('+ match {} with {}'.format(exp, sig))
-                            any_matched += 1
-                            if kk in method.__name__:
+                    same_pat = True
+                    while same_pat:
+                        for sig, method in candidates.items():
+                            if True or kk.lower() in method.__name__.lower():
+                                print('{} with {}'.format(sig, exp))
                                 foo = 1
-                            break  # go for the next method to match
-                    else:
-                        # not method has matched a group rule.
-                        # go for next group as group will be discarded
-                        if matches:
-                            # print('- partial filled group failed !! {}'.format(exp))
-                            partial_failed_matched.append(matches)
-                            matches = dict()
-                        break
-                    foo = 1
+                            m = re.match(exp, sig, re.IGNORECASE)
+                            if m:
+                                d = m.groupdict()
+                                if context.get('key', d.get('key')) != d.get('key', context.get('key')):
+                                    break  #  don't belong to same group
+                                context.update(d)
+                                context['filters'] = filters
+                                if 'key' in d:
+                                    context['fname'] = split_names(d['key'])
+                                matches[sig] = (pat, method, wrap, context)
+                                print('+ match {} with {}'.format(sig, exp))
+                                same_pat = True
+                                candidates.pop(sig)
+                                break
+                        else:
+                            same_pat = False
+                    # not method has matched a group rule.
+                    # go for next group as group will be discarded
                 if matches:
                     unique_matches.append(matches)
                     # restrict the search for next patterns to matched methods
