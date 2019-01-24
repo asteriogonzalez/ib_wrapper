@@ -72,7 +72,7 @@ def test_reconnect(app):
     e2 = t2 - t1
     e3 = t3 - t2
 
-    assert pytest.approx(e3, rel=1.0) == e1
+    assert pytest.approx(e3, abs=1.0) == e1
     assert e2 > e1  # > 2, "Reconnection lapse seems to not happend"
 
 
@@ -110,7 +110,7 @@ def test_realtime_bars(app, ES):
         time.sleep(1)
 
     assert pytest.approx(N, abs=1) == n0, "Check if market is closed at this time"
-
+    foo = 1
 
 def test_historical_data(app, ES):
     """Create a real time bar subscription, check that bars are sent
@@ -133,7 +133,8 @@ def test_historical_data(app, ES):
         '1d': ('1 Y', '1 day'),
     }
 
-    duration, timeframe = timeframes['1s']
+    barsize = '1s'
+    duration, timeframe = timeframes[barsize]
     end = ''
     show = 'TRADES'
 
@@ -157,6 +158,7 @@ def test_historical_data(app, ES):
     assert pytest.approx(len(answer), abs=100) == expected, \
            "only {} bars received. Expected {}".format(len(answer), expected)
 
+    print('Ok, received {} bars of {}'.format(expected, barsize))
     # app.cancelHistoricalData(answer) # this will fail even keepUpToDate is set
 
 def test_place_orders(app):
