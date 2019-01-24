@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 DONE:
-- Connection, Disconnection, Reconnect
-- Test Real Time Bars subscription
+- Check that connection is a demo connection, not real trading.
+- Connection, Disconnection, Reconnect.
+- Test Real Time Bars subscription.
+- High resolution historical downloader.
+- Capture errors related to a request and cancel it.
 
 TODO:
 - Place MKT orders
@@ -11,13 +14,15 @@ TODO:
 - Monitorize positions
 - Monitorize past executions
 - Market data subscriptions
-- High resolution historical downloader
+- Download historical data and keep live data subscription
 """
 
 from testapp import *
 
 import pytest
 import time
+from operator import mul
+from functools import reduce
 
 
 @pytest.fixture(scope="session",
@@ -26,6 +31,7 @@ def app(request):
     app = TestIBApp(*request.param)
     print("starting app")
     app.start()
+    # answer = app.reqManagedAccts()
 
     yield app  # provide the fixture value
     print("teardown app")
@@ -66,7 +72,7 @@ def test_reconnect(app):
     e2 = t2 - t1
     e3 = t3 - t2
 
-    pytest.approx(e3, rel=1.0) == e1
+    assert pytest.approx(e3, rel=1.0) == e1
     assert e2 > e1  # > 2, "Reconnection lapse seems to not happend"
 
 
@@ -81,7 +87,7 @@ def test_realtime_bars(app, ES):
 
     answer = app.reqRealTimeBars(ES, timeframe, 'TRADES', 0, [])
 
-    local_symbol = answer._call_args[1][0].localSymbol
+    local_symbol = answer.call_args[1][1].localSymbol
     assert local_symbol == ES.localSymbol
 
     # wait to receive some bars
@@ -89,9 +95,11 @@ def test_realtime_bars(app, ES):
         n0 = len(answer)
         print('{}: received: {} bars so far from {}'.format(time.asctime(), n0, local_symbol))
         time.sleep(1)
+        if answer:
+            bar = answer[-1]
+            assert reduce(mul, bar[1:5]) > 0  # open * high * low * close > 0. Volume may be zero
 
-
-    pytest.approx(N, abs=1) == n0
+    assert pytest.approx(N, abs=1) == n0, "Check if market is closed at this time"
 
     # cancel subscription and check that no more bars are received
     app.cancelRealTimeBars(answer)
@@ -101,7 +109,67 @@ def test_realtime_bars(app, ES):
         print('{}: received: {} bars so far from {}'.format(time.asctime(), n0, local_symbol))
         time.sleep(1)
 
-    pytest.approx(N, abs=1) == n0
+    assert pytest.approx(N, abs=1) == n0, "Check if market is closed at this time"
+
+
+def test_historical_data(app, ES):
+    """Create a real time bar subscription, check that bars are sent
+    and cancel subscription checking that no more bars are received.
+
+    *NOTE*: IB *slow down* softly your queries and refuse to send data back
+    in case your request are very intensive. That's mean any combination of
+    parameters that makes you do not receive a *Pacing Violation* are good
+    enough as the download speed for small bars is limited to a query around
+    10 secs on average.
+
+    https://interactivebrokers.github.io/tws-api/historical_limitations.html
+    """
+    timeframes = {
+        '1s': ('1440 S', '1 secs'),
+        '5s': ('7200 S', '5 secs'),
+        '1m': ('1 D', '1 min'),
+        '5m': ('1 D', '5 mins'),
+        '4h': ('1 D', '4 hours'),
+        '1d': ('1 Y', '1 day'),
+    }
+
+    duration, timeframe = timeframes['1s']
+    end = ''
+    show = 'TRADES'
+
+    # this is a blocking call
+    answer = app.reqHistoricalData(
+        ES,
+        end,
+        duration,
+        timeframe,
+        show,
+        useRTH=True,
+        formatDate=1,  # 1: '20190109  15:30:00', 2: '1547044200'
+        keepUpToDate=False,
+        chartOptions=None
+    )
+
+    assert answer[0].date < answer[-1].date, \
+           "historical data is not sorted as expected"
+
+    expected = eval(duration.split()[0])
+    assert pytest.approx(len(answer), abs=100) == expected, \
+           "only {} bars received. Expected {}".format(len(answer), expected)
+
+    # app.cancelHistoricalData(answer) # this will fail even keepUpToDate is set
+
+def test_place_orders(app):
+    """
+    - Get current position status
+    - Place orders not to be filled
+    - Move order until are filled
+    - Check position
+
+
+    """
+    pass
+
 
 
 

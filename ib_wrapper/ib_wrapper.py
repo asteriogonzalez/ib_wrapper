@@ -3,6 +3,8 @@
 """Dynamic TWS-IB API wrapping module to make callings blocking and
 avoid user to deal with asyncrhonous world.
 """
+# TODO: convert realtimeBar to ibapi.common.BarData
+
 import re
 import time
 import collections
@@ -52,7 +54,9 @@ class Answer(list):
     """
     def __init__(self, *args, **kw):
         self._lock = Lock()
-        self._call_args = None
+        self.call_args = None
+        self.error = None
+        self.return_code = None
         super(Answer, self).__init__(*args, **kw)
         self.acquire()
 
@@ -120,7 +124,7 @@ class IBWrapper():
        The key will remain in dwrapper as cache:
 
         >>> answer = app.reqManagedAccts()
-        >>> answer._reqid
+        >>> answer.reqid
         'ManagedAccts'
         >>> app.dwrapper._req2data
         {'ManagedAccts': ['DF1234567', 'DU1000000', 'DU1000001', 'DU1000002', 'DU1000003', 'DU1000003']}
@@ -134,6 +138,7 @@ class IBWrapper():
         'ONESHOT' : dict(timeout=60, one_shot=True, multiple_callbacks=False),
         'SUBSCRIPTION': dict(timeout=-1, one_shot=False, multiple_callbacks=False),
         'SUBMULTIPLE': dict(timeout=-1, one_shot=False, multiple_callbacks=True),
+        'DIRECT' : dict(timeout=0, one_shot=False, multiple_callbacks=False),
     }
 
     def __init__(self, app, excluded=('error', )):
@@ -220,19 +225,28 @@ class IBWrapper():
 
         debug = [
 
+            # direct
+            'error(reqId,errorCode,errorString)',
+
             # blocking
             'reqContractDetails(reqId,contract)',
             'contractDetails(reqId,contractDetails)',
             'contractDetailsEnd(reqId)',
 
+            # subscription
+            'reqRealTimeBars(reqId,contract,barSize,whatToShow,useRTH,realTimeBarsOptions)',
+            'realtimeBar(reqId,time,open_,high,low,close,volume,wap,count)',
+            'cancelRealTimeBars(reqId)',
+
             # one shot call
             'reqManagedAccts()',
             'managedAccounts(accountsList)',
 
-            # subcription
-            'reqRealTimeBars(reqId,contract,barSize,whatToShow,useRTH,realTimeBarsOptions)',
-            'cancelRealTimeBars(reqId)',
-            'realtimeBar(reqId,time,open_,high,low,close,volume,wap,count)',
+            # subscription
+            'reqHistoricalData(reqId,contract,endDateTime,durationStr,barSizeSetting,whatToShow,useRTH,formatDate,keepUpToDate,chartOptions)',
+            'cancelHistoricalData(reqId)',
+            'historicalData(reqId,bar)',
+            'historicalDataEnd(reqId,start,end)',
 
 
 
@@ -252,7 +266,6 @@ class IBWrapper():
         # 'cancelFundamentalData(reqId)',
         # 'cancelHeadTimeStamp(reqId)',
         # 'cancelHistogramData(tickerId)',
-        # 'cancelHistoricalData(reqId)',
         # 'cancelMktData(reqId)',
         # 'cancelMktDepth(reqId,isSmartDepth)',
         # 'cancelNewsBulletins()',
@@ -273,7 +286,6 @@ class IBWrapper():
         # 'disconnect()',
         # 'displayGroupList(reqId,groups)',
         # 'displayGroupUpdated(reqId,contractInfo)',
-        # 'error(reqId,errorCode,errorString)',
         # 'execDetails(reqId,contract,execution)',
         # 'execDetailsEnd(reqId)',
         # 'exerciseOptions(reqId,contract,exerciseAction,exerciseQuantity,account,override)',
@@ -281,8 +293,6 @@ class IBWrapper():
         # 'fundamentalData(reqId,data)',
         # 'headTimestamp(reqId,headTimestamp)',
         # 'histogramData(reqId,items)',
-        # 'historicalData(reqId,bar)',
-        # 'historicalDataEnd(reqId,start,end)',
         # 'historicalDataUpdate(reqId,bar)',
         # 'historicalNews(requestId,time,providerCode,articleId,headline)',
         # 'historicalNewsEnd(requestId,hasMore)',
@@ -327,7 +337,6 @@ class IBWrapper():
         # 'reqGlobalCancel()',
         # 'reqHeadTimeStamp(reqId,contract,whatToShow,useRTH,formatDate)',
         # 'reqHistogramData(tickerId,contract,useRTH,timePeriod)',
-        # 'reqHistoricalData(reqId,contract,endDateTime,durationStr,barSizeSetting,whatToShow,useRTH,formatDate,keepUpToDate,chartOptions)',
         # 'reqHistoricalNews(reqId,conId,providerCodes,startDateTime,endDateTime,totalResults,historicalNewsOptions)',
         # 'reqHistoricalTicks(reqId,contract,startDateTime,endDateTime,numberOfTicks,whatToShow,useRth,ignoreSize,miscOptions)',
         # 'reqIds(numIds)',
@@ -412,12 +421,28 @@ class IBWrapper():
         available = foo
 
         patterns = [
+            # direct calls from API
+            # e.g. error
+            ('DIRECT', [
+                (r'error\((reqId|requestId),.*', self.wrap_error, []),
+                ]
+             ),
 
             # blocking req X, answer X, req X Ends
             # e.g. reqAccountSummary, accountSummary, accountSummaryEnd
             ('BLOCKING', [
                 (r'req(?P<key>.*?)\((reqId|requestId),.*', self.wrap_call, []),
                 (r'{fname}\((reqId|requestId),.*', self.wrap_receive, [self._filter_string2list]),
+                (r'{fname}End\((reqId|requestId)[,\)]', self.wrap_ends, []),
+                ]
+             ),
+
+            # blocking req X, answer X, req X Ends
+            # e.g. reqHistoricalData, historicalData, historicalDataEnd, cancelHistoricalData
+            ('BLOCKING', [
+                (r'req(?P<key>.*?)\((reqId|requestId),.*', self.wrap_call, []),
+                (r'{fname}\((reqId|requestId),.*', self.wrap_receive, [self._filter_string2list]),
+                (r'cancel{fname}\((reqId|requestId)[,\)]', self.wrap_end_subscription, []),
                 (r'{fname}End\((reqId|requestId)[,\)]', self.wrap_ends, []),
                 ]
              ),
@@ -430,8 +455,6 @@ class IBWrapper():
                 ]
              ),
 
-
-
             # subcription req X, answer X, cancel X
             # e.g. reqAccountSummary, accountSummary, accountSummaryEnd
             ('SUBSCRIPTION', [
@@ -440,6 +463,7 @@ class IBWrapper():
                 (r'cancel{fname}\((reqId|requestId)[,\)]', self.wrap_end_subscription, []),
                 ]
             ),
+
             # # subcription with multiples callbacks for receiving data
             # # req X, answer_i X, cancel X
             # # e.g. reqMktDepth, updateMktDepth, updateMktDepthL2, cancelMktDepth
@@ -475,13 +499,13 @@ class IBWrapper():
             for group, patgroup in patterns:
                 context = dict(self.BEHAVIOR[group])
                 matches = dict()
-                print("........... candidates: {}".format(len(candidates)))
+                # print("........... candidates: {}".format(len(candidates)))
                 for pat, wrap, filters in patgroup:
                     exp = pat.format(**context)  # expand pattern
                     # seach for next desired method in group
                     for sig, method in candidates.items():
                         if kk.lower() in method.__name__.lower():
-                            print('{} with {}'.format(sig, exp))
+                            # print('{} with {}'.format(sig, exp))
                             foo = 1
                         m = re.match(exp, sig, re.IGNORECASE)
                         if m:
@@ -491,7 +515,7 @@ class IBWrapper():
                             if 'key' in d:
                                 context['fname'] = split_names(d['key'])
                             matches[sig] = (pat, method, wrap, context)
-                            print('+ match {} with {}'.format(exp, sig))
+                            # print('+ match {} with {}'.format(exp, sig))
                             any_matched += 1
                             if kk in method.__name__:
                                 foo = 1
@@ -500,7 +524,7 @@ class IBWrapper():
                         # not method has matched a group rule.
                         # go for next group as group will be discarded
                         if matches:
-                            print('- partial filled group failed !! {}'.format(exp))
+                            # print('- partial filled group failed !! {}'.format(exp))
                             partial_failed_matched.append(matches)
                             matches = dict()
                         break
@@ -508,14 +532,35 @@ class IBWrapper():
                 if matches:
                     unique_matches.append(matches)
                     # restrict the search for next patterns to matched methods
-                    candidates = dict([(sig, method) for (sig, (pat, method, wrap, context)) in matches.items()])
+                    # candidates = dict([(sig, method) for (sig, (pat, method, wrap, context)) in matches.items()])
                     foo = 1
 
-            l = len(unique_matches)
-            if l == 1:
+            if not unique_matches:
+                if partial_failed_matched:
+                    print("ERROR: PARTIAL MATCHED but NONE FULL MATCHED")
+                    for i, matches in enumerate(partial_failed_matched):
+                        print("- Group {}{}".format(i, '-'*40))
+                        for sig, (pat, method, wrap, context) in matches.items():
+                            print('- removing {}: {}'.format(sig, pat, ))
+                            available.pop(sig, None)
+                    foo = 1  # TODO: raise an exception and stop?
+                else:
+                    # the remain available methods can not be wrapped
+                    # print and continue
+                    print("WARNING: UNWRAPPED METHODS")
+                    for sig in available:
+                        print (" ? {}".format(sig))
+                    break
+            else:
+                # select the best match (the wider one)
+                sizes = [len(m) for m in unique_matches]
+                mx = max(sizes)
+                hits = [1 if s == mx else 0 for s in sizes]
+                assert sum(hits) == 1, "AMBIGUITY, multiple best candidates in pattern recognition"
+                matches = unique_matches[hits.index(1)]
+
                 # a single group has been matched, so we can wrap all
                 # the matched methods
-                matches = unique_matches[0]
                 print("- Wrapped Group methods {}".format('-'*40))
                 for sig, (pat, method, wrap, context) in matches.items():
                     if wrap:
@@ -525,33 +570,7 @@ class IBWrapper():
                         print('ignoring {} by pattern {}'.format(sig, pat))
                     available.pop(sig)
                 foo = 1
-            elif l > 1:
-                # more that 1 group has been matched, so patterns are poorly
-                # defined, need more exclussion specification.
-                print("ERROR: AMBIGUITY in PATTERN WRAP DEFINITIONS")
-                for i, matches in enumerate(unique_matches):
-                    print("- Group {}{}".format(i, '-'*40))
-                    for sig, (pat, method, wrap) in matches.items():
-                        print('- {}: {}'.format(sig, pat, ))
-                        available.pop(sig, None)
-                foo = 1  # TODO: raise an exception and stop?
-            elif partial_failed_matched:
-                print("ERROR: PARTIAL MATCHED but NONE FULL MATCHED")
-                for i, matches in enumerate(partial_failed_matched):
-                    print("- Group {}{}".format(i, '-'*40))
-                    for sig, (pat, method, wrap, context) in matches.items():
-                        print('- removing {}: {}'.format(sig, pat, ))
-                        available.pop(sig, None)
-                foo = 1  # TODO: raise an exception and stop?
 
-            elif not any_matched:
-                # the remain available methods can not be wrapped
-                # print and continue
-                print("WARNING: UNWRAPPED METHODS")
-                for sig in available:
-                    print (" ? {}".format(sig))
-
-                break
 
         foo = 1
 
@@ -568,8 +587,8 @@ class IBWrapper():
             reqid = context['key']
 
         answer = container[reqid] = Answer()
-        answer._call_args = (f, args, kw)
-        answer._reqid = reqid
+        answer.call_args = (f, args, kw)
+        answer.reqid = reqid
         tries = 10
         for tries in range(10):
             try:
@@ -603,7 +622,7 @@ class IBWrapper():
 
                 if context['one_shot'] == False:
                     # one shot calls will remain as cache
-                    container.pop(answer._reqid)
+                    container.pop(answer.reqid)
             return answer
         self._wrapper_context[f] = context
         return wrap
@@ -620,8 +639,8 @@ class IBWrapper():
                 reqid, _args = context['key'], args
                 if reqid not in container:
                     answer = container[reqid] = Answer()
-                    answer._call_args = (f, tuple('?', ), dict())
-                    answer._reqid = reqid
+                    answer.call_args = (f, tuple('?', ), dict())
+                    answer.reqid = reqid
 
             answer = container[reqid]
             for func in context['filters']:
@@ -644,24 +663,53 @@ class IBWrapper():
         - Release blocking thread that is waiting the response (if any).
         - Update differencial state for the key associated with the call.
         """
-        def wrap(reqid):
-            self._cancel_request(f, reqid)
-            return f(reqid)
+        def wrap(reqid, *args, **kw):
+            self._cancel_request(f, reqid, *args, **kw)
+            return f(reqid, *args, **kw)
         self._wrapper_context[f] = context
         return wrap
 
     def wrap_end_subscription(self, f, **context):
         def wrap(answer):
-            reqid = answer._reqid
+            reqid = answer.reqid
             self._cancel_request(f, reqid)
             return f(reqid)
         self._wrapper_context[f] = context
         return wrap
 
-    def _cancel_request(self, f, reqid):
+    def wrap_error(self, f, **context):
+        def wrap(*args, **kw):
+            context = self._wrapper_context[f]
+            container = self.get_container(f)
+
+            if context['one_shot'] == False:
+                reqid, _args = args[0], args[1:]
+            else:
+                reqid, _args = context['key'], args
+                if reqid not in container:
+                    answer = container[reqid] = Answer()
+                    answer.call_args = (f, tuple('?', ), dict())
+                    answer.reqid = reqid
+
+            print(_args)
+
+            answer = container.get(reqid)
+            if answer is not None:
+                answer.error = _args
+                answer.release()
+
+            return f(*args, **kw)
+        self._wrapper_context[f] = context
+        return wrap
+
+    def _cancel_request(self, f, reqid, *args, **kw):
         container = self.get_container(f)
-        answer = container[reqid]
-        answer.release()
+        answer = container.get(reqid)
+        if answer is None:
+            foo = 1  # request has been finalized earlier (e.g. historicalData)
+        else:
+            answer.return_code = (args, kw)
+            answer.release()
 
     def _filter_string2list(self, args):
         result = list()
@@ -698,8 +746,8 @@ class IBApp(EWrapper, EClient):
 
         time.sleep(1)  #  let the main loop to run, avoiding dead lock on fast reconnections
 
-        answer = self.reqManagedAccts()
         if self.demo:
+            answer = self.reqManagedAccts()
             condition = [account.startswith('D') for account in flatten(answer)]
             if not reduce(and_, condition):
                 raise RuntimeError(
